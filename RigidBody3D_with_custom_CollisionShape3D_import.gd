@@ -1,4 +1,5 @@
 # This script is used to re-import gltf assets to make rigidbody objects with custom collosion meshes.
+# It also saves the rigidbody with collisions as a *.tscn in res://
 # 
 # Your gltf should have exactly one mesh with multiple children
 # The root mesh is used for the MeshInstance3D of the RigidBody3D
@@ -15,6 +16,7 @@
 extends EditorScenePostImport
 
 func _post_import(scene):
+	print(scene.name)
 	print(scene.transform)
 	
 	print("Starting post-import processing.")
@@ -26,51 +28,59 @@ func _post_import(scene):
 	# Get the main MeshInstance3D
 	var mesh_model = scene.get_child(0)
 
-	# Check if the first child is a MeshInstance3D
+	# Check if the child is a MeshInstance3D
+	# This is used for the MeshInstance3D on the imported model
 	if not mesh_model is MeshInstance3D:
 		push_error("Scene's first child should be MeshInstance3D.")
 		return scene
 	
-	# Ensure the MeshInstance3D has at least one MeshInstance3D child
-	if mesh_model.get_child_count() < 1:
-		push_error("MeshInstance3D should have at least one MeshInstance3D child.")
-		return scene
-	
-	# Check if the first grandchild is a MeshInstance3D
-	if not mesh_model.get_child(0) is MeshInstance3D:
-		push_error("MeshInstance3D's first child should be MeshInstance3D.")
-		return scene
+	# Check that all granchildren are MeshInstance3D
+	# These are used for the convex collision shapes
+	for child in mesh_model.get_children():
+		if not child is MeshInstance3D and child.mesh:
+			push_error("All Grandchildren should be of type MeshInstance3D.")
+			return scene
 	
 	# Detach the main MeshInstance3D from the scene
-	scene.remove_child(mesh_model)
+	mesh_model.set_owner(null) # Seems like this shouldn't need to be here, but it does. Perhaps a bug.
+	scene.remove_child(mesh_model) # without the line above, this makes a warning
 	
 	# Create a new RigidBody3D and configure it
+	# This will be the root node of the returned scene
 	var rigid_body = RigidBody3D.new()
 	rigid_body.name = mesh_model.name + "_rigid"
 	
 	# Add the main MeshInstance3D as a child of the new RigidBody3D
 	rigid_body.add_child(mesh_model)
-	# Set the owner to the rigid_body to ensure it's saved with the scene
-	mesh_model.owner = rigid_body  
+	mesh_model.set_owner(rigid_body)
 
 	# Iterate through MeshInstance3D children to create individual collision shapes
 	for child in mesh_model.get_children():
-		if child is MeshInstance3D and child.mesh:
-			var mesh_shape = child.mesh.create_convex_shape()
-			var collision_shape = CollisionShape3D.new()
-			collision_shape.shape = mesh_shape
-			# Apply the original mesh child's transform to the collision shape
-			collision_shape.transform = child.transform
-			# Add the collision shape to the RigidBody3D
-			rigid_body.add_child(collision_shape)
-			# Set the owner to ensure it's saved with the rigid_body
-			collision_shape.owner = rigid_body
-			print("Added CollisionShape3D for: ", child.name)
-			# Remove the original MeshInstance3D as it's now represented by a collision shape
-			child.queue_free()
+		var mesh_shape = child.mesh.create_convex_shape()
+		var collision_shape = CollisionShape3D.new()
+		collision_shape.shape = mesh_shape
+		collision_shape.name = child.name + "_collision"
+		# Apply the original mesh child's transform to the collision shape
+		collision_shape.transform = child.transform
+		# Add the collision shape to the RigidBody3D
+		rigid_body.add_child(collision_shape)
+		# Set the owner to ensure it's saved with the rigid_body # scene
+		collision_shape.set_owner(rigid_body)
+		print("Added CollisionShape3D for: ", child.name)
+		# Remove the original MeshInstance3D as it's now represented by a collision shape
+		mesh_model.remove_child(child)
+		child.queue_free()
 	
 	# Free the original scene root, as it's no longer needed
 	scene.queue_free()
+	
 	print("Finished setting up RigidBody3D and collision shapes.")
-	# Return the new root node (RigidBody3D) to replace the original scene root
+	
+	# Create and save scene
+	var packed_scene = PackedScene.new()
+	packed_scene.pack(rigid_body)
+	var save_path = "res://" + rigid_body.name + ".tscn"
+	print("Saving scene... " + save_path)
+	ResourceSaver.save(packed_scene, save_path)
+	
 	return rigid_body
